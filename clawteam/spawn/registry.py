@@ -63,6 +63,15 @@ def is_agent_alive(team_name: str, agent_name: str) -> bool | None:
     return None
 
 
+def remove_agent(team_name: str, agent_name: str) -> None:
+    """Remove an agent's spawn info from the registry."""
+    path = _registry_path(team_name)
+    registry = _load(path)
+    if agent_name in registry:
+        del registry[agent_name]
+        _save(path, registry)
+
+
 def list_dead_agents(team_name: str) -> list[str]:
     """Return names of agents whose processes are no longer alive."""
     registry = get_registry(team_name)

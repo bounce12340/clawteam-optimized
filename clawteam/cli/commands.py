@@ -2564,5 +2564,109 @@ def monitor_restart_dead(
         )
 
 
+# ============================================================================
+# Cleanup Commands
+# ============================================================================
+
+cleanup_app = typer.Typer(help="Cleanup idle and completed agents")
+app.add_typer(cleanup_app, name="cleanup")
+
+
+@cleanup_app.command("status")
+def cleanup_status():
+    """Show cleanup status - list all running agents and their idle status."""
+    from clawteam.cleanup import get_cleanup_summary
+    
+    summary = get_cleanup_summary()
+    
+    def _human(data):
+        console.print(f"\n[bold]Total Agents: {data['total_agents']}[/bold]")
+        console.print(f"Idle Agents: {len(data['idle_agents'])}\n")
+        
+        if data['teams']:
+            table = Table(title="Teams")
+            table.add_column("Team", style="cyan")
+            table.add_column("Agents", style="dim")
+            table.add_column("Status")
+            
+            for team, agents in data['teams'].items():
+                idle_count = sum(1 for a in data['idle_agents'] if a['team'] == team)
+                status = f"[yellow]{idle_count} idle[/yellow]" if idle_count > 0 else "[green]active[/green]"
+                table.add_row(team, str(len(agents)), status)
+            
+            console.print(table)
+        else:
+            console.print("[dim]No running agents found.[/dim]")
+    
+    _output(summary, _human)
+
+
+@cleanup_app.command("idle")
+def cleanup_idle(
+    team: Optional[str] = typer.Option(None, "--team", "-t", help="Specific team to cleanup"),
+    threshold: int = typer.Option(30, "--threshold", help="Idle threshold in minutes"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be done without killing"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force kill without graceful shutdown"),
+):
+    """Kill idle agents that have been inactive for the threshold period."""
+    from clawteam.cleanup import cleanup_team_agents, cleanup_all_teams
+    
+    if team:
+        results = cleanup_team_agents(team, idle_only=True, idle_threshold_minutes=threshold, dry_run=dry_run)
+        teams_results = [results]
+    else:
+        teams_results = cleanup_all_teams(idle_only=True, idle_threshold_minutes=threshold, dry_run=dry_run)
+    
+    def _human(results_list):
+        total_killed = sum(len(r['killed']) for r in results_list)
+        total_skipped = sum(len(r['skipped']) for r in results_list)
+        total_errors = sum(len(r['errors']) for r in results_list)
+        
+        action = "Would kill" if dry_run else "Killed"
+        console.print(f"\n[bold]{action} {total_killed} idle agents[/bold]")
+        if total_skipped > 0:
+            console.print(f"Skipped {total_skipped} active agents")
+        if total_errors > 0:
+            console.print(f"[red]Errors: {total_errors}[/red]")
+        
+        for result in results_list:
+            if result['killed']:
+                console.print(f"\n[cyan]{result['team']}:[/cyan]")
+                for killed in result['killed']:
+                    dry_marker = " [dry-run]" if killed.get('dry_run') else ""
+                    console.print(f"  • {killed['agent']} (PID: {killed['pid']}){dry_marker}")
+    
+    _output(teams_results, _human)
+
+
+@cleanup_app.command("team")
+def cleanup_team(
+    team: str = typer.Argument(..., help="Team name to cleanup"),
+    all_agents: bool = typer.Option(False, "--all", "-a", help="Kill all agents, not just idle ones"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be done without killing"),
+):
+    """Kill all agents for a specific team."""
+    from clawteam.cleanup import cleanup_team_agents
+    
+    results = cleanup_team_agents(team, idle_only=not all_agents, dry_run=dry_run)
+    
+    def _human(data):
+        action = "Would kill" if dry_run else "Killed"
+        console.print(f"\n[bold]{action} {len(data['killed'])} agents in team '{data['team']}'[/bold]")
+        
+        if data['killed']:
+            for killed in data['killed']:
+                dry_marker = " [dry-run]" if killed.get('dry_run') else ""
+                console.print(f"  • {killed['agent']} (PID: {killed['pid']}){dry_marker}")
+        
+        if data['skipped']:
+            console.print(f"\n[yellow]Skipped {len(data['skipped'])} active agents[/yellow]")
+        
+        if data['errors']:
+            console.print(f"\n[red]Failed to kill {len(data['errors'])} agents[/red]")
+    
+    _output(results, _human)
+
+
 if __name__ == "__main__":
     app()

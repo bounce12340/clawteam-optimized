@@ -105,3 +105,105 @@ def disable_auto_execution():
     from clawteam.team.models import get_data_dir
     flag = get_data_dir() / "auto_execute"
     flag.unlink(missing_ok=True)
+
+
+# ============================================================================
+# Auto-termination functionality
+# ============================================================================
+
+class AgentAutoTerminator:
+    """Monitors agent activity and auto-terminates when idle or tasks completed."""
+    
+    def __init__(self, team_name: str, agent_name: str, 
+                 idle_timeout_minutes: int = 30,
+                 check_interval_seconds: int = 60):
+        self.team_name = team_name
+        self.agent_name = agent_name
+        self.idle_timeout = timedelta(minutes=idle_timeout_minutes)
+        self.check_interval = check_interval_seconds
+        self.last_activity = datetime.now()
+        self._stop_event = threading.Event()
+        self._thread = None
+    
+    def start_monitoring(self):
+        """Start the auto-termination monitoring thread."""
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+        logger.info(f"Auto-terminator started for {self.agent_name} in {self.team_name}")
+    
+    def stop_monitoring(self):
+        """Stop the monitoring thread."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+    
+    def record_activity(self):
+        """Call this whenever the agent performs activity."""
+        self.last_activity = datetime.now()
+    
+    def _monitor_loop(self):
+        """Main monitoring loop."""
+        task_store = TaskStore(self.team_name)
+        
+        while not self._stop_event.is_set():
+            time.sleep(self.check_interval)
+            
+            # Check if all tasks are completed
+            tasks = task_store.list_tasks(owner=self.agent_name)
+            pending_tasks = [t for t in tasks if t.status.value in ("pending", "in_progress")]
+            
+            if not pending_tasks:
+                # All tasks completed - exit
+                logger.info(f"All tasks completed for {self.agent_name}, auto-terminating")
+                self._exit_agent("All tasks completed")
+                return
+            
+            # Check idle timeout
+            idle_duration = datetime.now() - self.last_activity
+            if idle_duration > self.idle_timeout:
+                logger.info(f"Agent {self.agent_name} idle for {idle_duration}, auto-terminating")
+                self._exit_agent(f"Idle timeout ({idle_duration})")
+                return
+    
+    def _exit_agent(self, reason: str):
+        """Exit the agent process gracefully."""
+        try:
+            # Send completion message to leader
+            mailbox = MailboxManager(self.team_name)
+            mailbox.send(
+                from_agent=self.agent_name,
+                to="strategy-lead",
+                msg_type=MessageType.task_completed,
+                content=f"Agent {self.agent_name} auto-terminated: {reason}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send termination message: {e}")
+        
+        # Exit the process
+        logger.info(f"Exiting agent {self.agent_name}: {reason}")
+        sys.exit(0)
+
+
+def start_auto_termination(team_name: str, agent_name: str,
+                           idle_timeout_minutes: int = 30) -> AgentAutoTerminator:
+    """Start auto-termination monitoring for this agent.
+    
+    Call this when agent starts up. The agent will automatically exit when:
+    - All assigned tasks are completed, OR
+    - Agent has been idle for the specified timeout
+    
+    Args:
+        team_name: Name of the team
+        agent_name: Name of this agent
+        idle_timeout_minutes: How long before auto-terminating when idle
+    
+    Returns:
+        AgentAutoTerminator instance (call record_activity() on it periodically)
+    """
+    terminator = AgentAutoTerminator(
+        team_name=team_name,
+        agent_name=agent_name,
+        idle_timeout_minutes=idle_timeout_minutes
+    )
+    terminator.start_monitoring()
+    return terminator

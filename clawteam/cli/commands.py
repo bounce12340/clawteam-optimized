@@ -1743,6 +1743,11 @@ def spawn_agent(
         _output({"error": result}, lambda d: console.print(f"[red]{d['error']}[/red]"))
         raise typer.Exit(1)
 
+    # Auto-trigger task execution: claim the agent's pending tasks as
+    # in_progress and send a start message to their inbox.
+    from clawteam.auto_execute import auto_trigger_agent_tasks
+    auto_trigger_agent_tasks(_team, _name, _id, agent_type)
+
     _output(
         {"status": "spawned", "backend": backend, "agentName": _name, "agentId": _id, "message": result},
         lambda d: console.print(f"[green]OK[/green] {d['message']}"),
@@ -2281,11 +2286,11 @@ def launch_team(
             skip_permissions=_skip,
         )
         spawned.append({"name": agent.name, "id": a_id, "type": agent.type, "result": result})
-        
-        # Auto-trigger task execution after spawn
-        from clawteam.auto_execute import auto_trigger_agent_tasks, is_auto_execution_enabled
-        if is_auto_execution_enabled():
-            auto_trigger_agent_tasks(t_name, agent.name, a_id, agent.type)
+
+        # Auto-trigger task execution after every spawn: claim pending tasks
+        # as in_progress and send a start message to the agent's inbox.
+        from clawteam.auto_execute import auto_trigger_agent_tasks
+        auto_trigger_agent_tasks(t_name, agent.name, a_id, agent.type)
 
     # 9. Output summary
     out = {
@@ -2324,12 +2329,23 @@ app.add_typer(auto_app, name="auto")
 
 @auto_app.command("enable")
 def auto_enable():
-    """Enable auto-execution for all future team launches."""
+    """Enable auto-execution flag (persisted across restarts)."""
     from clawteam.auto_execute import enable_auto_execution
     enable_auto_execution()
     _output(
         {"status": "enabled", "auto_execute": True},
-        lambda d: console.print("[green]OK[/green] Auto-execution enabled for future team launches"),
+        lambda d: console.print("[green]OK[/green] Auto-execution enabled (persisted)"),
+    )
+
+
+@auto_app.command("disable")
+def auto_disable():
+    """Disable auto-execution flag."""
+    from clawteam.auto_execute import disable_auto_execution
+    disable_auto_execution()
+    _output(
+        {"status": "disabled", "auto_execute": False},
+        lambda d: console.print("[yellow]OK[/yellow] Auto-execution disabled"),
     )
 
 

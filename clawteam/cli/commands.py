@@ -2281,6 +2281,11 @@ def launch_team(
             skip_permissions=_skip,
         )
         spawned.append({"name": agent.name, "id": a_id, "type": agent.type, "result": result})
+        
+        # Auto-trigger task execution after spawn
+        from clawteam.auto_execute import auto_trigger_agent_tasks, is_auto_execution_enabled
+        if is_auto_execution_enabled():
+            auto_trigger_agent_tasks(t_name, agent.name, a_id, agent.type)
 
     # 9. Output summary
     out = {
@@ -2307,6 +2312,36 @@ def launch_team(
         console.print(f"[bold]Inbox:[/bold]  clawteam inbox peek {t_name} --agent <name>")
 
     _output(out, _human)
+
+
+# ============================================================================
+# Auto-execution Commands
+# ============================================================================
+
+auto_app = typer.Typer(help="Auto-execution management")
+app.add_typer(auto_app, name="auto")
+
+
+@auto_app.command("enable")
+def auto_enable():
+    """Enable auto-execution for all future team launches."""
+    from clawteam.auto_execute import enable_auto_execution
+    enable_auto_execution()
+    _output(
+        {"status": "enabled", "auto_execute": True},
+        lambda d: console.print("[green]OK[/green] Auto-execution enabled for future team launches"),
+    )
+
+
+@auto_app.command("status")
+def auto_status():
+    """Check auto-execution status."""
+    from clawteam.auto_execute import is_auto_execution_enabled
+    enabled = is_auto_execution_enabled()
+    _output(
+        {"auto_execute": enabled},
+        lambda d: console.print(f"Auto-execution: {'[green]enabled[/green]' if d['auto_execute'] else '[yellow]disabled[/yellow]'}"),
+    )
 
 
 if __name__ == "__main__":

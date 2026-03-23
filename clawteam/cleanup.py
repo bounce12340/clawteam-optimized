@@ -20,17 +20,21 @@ from clawteam.team.tasks import TaskStore
 
 
 def _kill_tmux_window(target: str) -> bool:
-    """Kill a tmux window. Returns True on success."""
+    """Kill a tmux window. Returns True on success or already gone."""
     if not target:
-        return False
-    result = subprocess.run(["tmux", "kill-window", "-t", target], capture_output=True)
-    return result.returncode == 0
+        return True  # Nothing to kill
+    result = subprocess.run(["tmux", "kill-window", "-t", target], capture_output=True, text=True)
+    # Return True if success or window/session doesn't exist
+    if result.returncode == 0:
+        return True
+    stderr_lower = result.stderr.lower() if result.stderr else ""
+    return any(msg in stderr_lower for msg in ["can't find", "does not exist", "no such", "not found"])
 
 
 def _kill_pid(pid: int, graceful: bool = True) -> bool:
     """Send SIGTERM (or SIGKILL) to a PID. Returns True if process is gone."""
     if pid <= 0:
-        return False
+        return True  # Already dead or invalid PID
     try:
         if graceful:
             os.kill(pid, signal.SIGTERM)

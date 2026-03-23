@@ -2468,13 +2468,16 @@ def monitor_agents(
                 "completed": "blue",
                 "error": "red",
                 "unknown": "dim",
-            }.get(agent.status, "white")
+            }.get(agent["status"], "white")
             
             # Process status indicator
-            if agent.process_status == "running":
+            process_status = agent.get("process_status", "unknown")
+            agent_status = agent.get("status", "unknown")
+            
+            if process_status == "running":
                 process_indicator = "[green]● running[/green]"
-            elif agent.process_status == "exited":
-                if agent.status == "completed":
+            elif process_status == "exited":
+                if agent_status == "completed":
                     process_indicator = "[blue]○ completed[/blue]"
                 else:
                     process_indicator = "[red]✗ exited[/red]"
@@ -2482,19 +2485,19 @@ def monitor_agents(
                 process_indicator = "[dim]? unknown[/dim]"
             
             table.add_row(
-                agent.name,
+                agent["name"],
                 process_indicator,
-                f"[{status_color}]{agent.status}[/{status_color}]",
-                agent.current_task or "-",
-                f"{agent.progress}%" if agent.progress > 0 else "-",
-                str(agent.restart_count) if agent.restart_count > 0 else "-",
+                f"[{status_color}]{agent_status}[/{status_color}]",
+                agent.get("current_task") or "-",
+                f"{agent.get('progress', 0)}%" if agent.get("progress", 0) > 0 else "-",
+                str(agent.get("restart_count", 0)) if agent.get("restart_count", 0) > 0 else "-",
             )
         
         console.print(table)
     
     _output([{"name": a.name, "alive": a.alive, "status": a.status, 
               "current_task": a.current_task, "progress": a.progress,
-              "restart_count": a.restart_count} for a in agents], _human)
+              "restart_count": a.restart_count, "process_status": a.process_status} for a in agents], _human)
 
 
 @monitor_app.command("timeouts")

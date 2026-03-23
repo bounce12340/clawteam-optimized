@@ -21,11 +21,12 @@ class AgentHealth:
     """Health status for a single agent."""
     name: str
     alive: bool
-    status: str  # "idle", "working", "error", "unknown"
+    status: str  # "idle", "working", "error", "completed", "unknown"
     current_task: Optional[str] = None
     progress: int = 0
     last_heartbeat: Optional[str] = None
     restart_count: int = 0
+    process_status: str = "unknown"  # "running", "exited", "unknown"
 
 
 @dataclass
@@ -62,7 +63,12 @@ class HealthMonitor:
     def get_agent_health(self, agent_name: str) -> AgentHealth:
         """Get comprehensive health status for an agent."""
         # Check process liveness
-        alive = is_agent_alive(self.team_name, agent_name) or False
+        alive = is_agent_alive(self.team_name, agent_name)
+        process_status = "unknown"
+        if alive is True:
+            process_status = "running"
+        elif alive is False:
+            process_status = "exited"
         
         # Get heartbeat info
         heartbeat_record = self.heartbeat.get_last_heartbeat(agent_name)
@@ -70,25 +76,39 @@ class HealthMonitor:
         # Get restart count
         restart_count = self.recovery.get_restart_count(agent_name)
         
+        # Determine agent status
         if heartbeat_record:
+            # Use heartbeat status if available
+            status = heartbeat_record.status
+            # If process exited but heartbeat says completed, that's normal
+            if process_status == "exited" and status == "completed":
+                alive = True  # Consider completed agents as healthy
+            elif process_status == "exited":
+                alive = False
+            else:
+                alive = alive and self.heartbeat.is_alive(agent_name)
+            
             return AgentHealth(
                 name=agent_name,
-                alive=alive and self.heartbeat.is_alive(agent_name),
-                status=heartbeat_record.status,
+                alive=alive,
+                status=status,
                 current_task=heartbeat_record.current_task,
                 progress=heartbeat_record.progress_percent,
                 last_heartbeat=heartbeat_record.timestamp,
                 restart_count=restart_count,
+                process_status=process_status,
             )
         else:
+            # No heartbeat - rely on process status only
             return AgentHealth(
                 name=agent_name,
-                alive=alive,
-                status="unknown",
+                alive=alive if alive is True else False,
+                status="completed" if process_status == "exited" else "unknown",
                 current_task=None,
                 progress=0,
                 last_heartbeat=None,
                 restart_count=restart_count,
+                process_status=process_status,
             )
     
     def get_all_agents_health(self) -> list[AgentHealth]:
@@ -147,8 +167,10 @@ class HealthMonitor:
         tasks = self.get_all_tasks_health()
         
         # Agent summary
+        # Count completed agents (exited normally) separately from dead agents
+        completed_agents = sum(1 for a in agents if a.status == "completed")
         alive_agents = sum(1 for a in agents if a.alive)
-        dead_agents = len(agents) - alive_agents
+        dead_agents = sum(1 for a in agents if not a.alive and a.status != "completed")
         working_agents = sum(1 for a in agents if a.status == "working")
         error_agents = sum(1 for a in agents if a.status == "error")
         
@@ -165,7 +187,7 @@ class HealthMonitor:
         # Determine overall health
         issues = []
         if dead_agents > 0:
-            issues.append(f"{dead_agents} dead agents")
+            issues.append(f"{dead_agents} dead agents (unexpected)")
         if error_agents > 0:
             issues.append(f"{error_agents} agents in error state")
         if timeout_tasks:
@@ -173,6 +195,8 @@ class HealthMonitor:
         if blocked > 0:
             issues.append(f"{blocked} blocked tasks")
         
+        # Only count unexpected deaths as critical
+        # Completed agents (finished work) are not an issue
         if dead_agents > 0 or error_agents > 0 or timeout_tasks:
             overall = "critical"
         elif alert_tasks or blocked > 0:
@@ -187,6 +211,7 @@ class HealthMonitor:
                 "total": len(agents),
                 "alive": alive_agents,
                 "dead": dead_agents,
+                "completed": completed_agents,
                 "working": working_agents,
                 "error": error_agents,
                 "details": [asdict(a) for a in agents],

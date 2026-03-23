@@ -2399,26 +2399,32 @@ def monitor_health(
             
             # Agents
             agents = data["agents"]
-            console.print(f"\n[bold]Agents:[/bold] {agents['alive']}/{agents['total']} alive")
+            console.print(f"\n[bold]Agents:[/bold] {agents['total']} total")
+            if agents['alive'] > 0:
+                console.print(f"  [green]● Alive: {agents['alive']}[/green]")
             if agents['working'] > 0:
-                console.print(f"  Working: {agents['working']}")
-            if agents['error'] > 0:
-                console.print(f"  [red]Error: {agents['error']}[/red]")
+                console.print(f"    Working: {agents['working']}")
+            if agents.get('completed', 0) > 0:
+                console.print(f"  [blue]● Completed: {agents['completed']}[/blue]")
             if agents['dead'] > 0:
-                console.print(f"  [red]Dead: {agents['dead']}[/red]")
+                console.print(f"  [red]● Dead (unexpected): {agents['dead']}[/red]")
+            if agents['error'] > 0:
+                console.print(f"  [red]● Error: {agents['error']}[/red]")
             
             # Tasks
             tasks = data["tasks"]
-            console.print(f"\n[bold]Tasks:[/bold] {tasks['completed']}/{tasks['total']} completed")
-            console.print(f"  In progress: {tasks['in_progress']}")
+            console.print(f"\n[bold]Tasks:[/bold] {tasks['total']} total")
+            console.print(f"  [green]● Completed: {tasks['completed']}[/green]")
+            if tasks['in_progress'] > 0:
+                console.print(f"  [yellow]● In progress: {tasks['in_progress']}[/yellow]")
             if tasks['pending'] > 0:
-                console.print(f"  Pending: {tasks['pending']}")
+                console.print(f"  ○ Pending: {tasks['pending']}")
             if tasks['blocked'] > 0:
-                console.print(f"  [yellow]Blocked: {tasks['blocked']}[/yellow]")
+                console.print(f"  [yellow]○ Blocked: {tasks['blocked']}[/yellow]")
             if tasks['timeout'] > 0:
-                console.print(f"  [red]Timeout: {tasks['timeout']}[/red]")
+                console.print(f"  [red]● Timeout: {tasks['timeout']}[/red]")
             if tasks['alert'] > 0:
-                console.print(f"  [yellow]Slow: {tasks['alert']}[/yellow]")
+                console.print(f"  [yellow]○ Slow: {tasks['alert']}[/yellow]")
         
         _output(dashboard, _human)
     
@@ -2448,23 +2454,36 @@ def monitor_agents(
     def _human(data):
         table = Table(title=f"Agent Health - {team}")
         table.add_column("Agent", style="cyan")
+        table.add_column("Process")
         table.add_column("Status")
         table.add_column("Task")
         table.add_column("Progress")
         table.add_column("Restarts")
         
         for agent in data:
+            # Status color
             status_color = {
                 "working": "green",
                 "idle": "blue",
+                "completed": "blue",
                 "error": "red",
                 "unknown": "dim",
             }.get(agent.status, "white")
             
-            alive_marker = "[green]●[/green]" if agent.alive else "[red]●[/red]"
+            # Process status indicator
+            if agent.process_status == "running":
+                process_indicator = "[green]● running[/green]"
+            elif agent.process_status == "exited":
+                if agent.status == "completed":
+                    process_indicator = "[blue]○ completed[/blue]"
+                else:
+                    process_indicator = "[red]✗ exited[/red]"
+            else:
+                process_indicator = "[dim]? unknown[/dim]"
             
             table.add_row(
-                f"{alive_marker} {agent.name}",
+                agent.name,
+                process_indicator,
                 f"[{status_color}]{agent.status}[/{status_color}]",
                 agent.current_task or "-",
                 f"{agent.progress}%" if agent.progress > 0 else "-",

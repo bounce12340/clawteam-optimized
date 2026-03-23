@@ -2360,5 +2360,187 @@ def auto_status():
     )
 
 
+# ============================================================================
+# Monitor Commands (Health, Heartbeat, Timeout, Recovery)
+# ============================================================================
+
+monitor_app = typer.Typer(help="Team monitoring and health checks")
+app.add_typer(monitor_app, name="monitor")
+
+
+@monitor_app.command("health")
+def monitor_health(
+    team: str = typer.Argument(..., help="Team name"),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Continuously watch health status"),
+    interval: int = typer.Option(5, "--interval", "-i", help="Watch interval in seconds"),
+):
+    """Show comprehensive health dashboard for a team."""
+    from clawteam.health import HealthMonitor
+    
+    def _show():
+        monitor = HealthMonitor(team)
+        dashboard = monitor.get_dashboard()
+        
+        def _human(data):
+            # Overall status
+            health_color = {
+                "healthy": "green",
+                "warning": "yellow",
+                "critical": "red",
+            }.get(data["overall_health"], "white")
+            
+            console.print(f"\n[{health_color} bold]Health: {data['overall_health'].upper()}[/]")
+            
+            # Issues
+            if data["issues"]:
+                console.print("[red]Issues:[/red]")
+                for issue in data["issues"]:
+                    console.print(f"  • {issue}")
+            
+            # Agents
+            agents = data["agents"]
+            console.print(f"\n[bold]Agents:[/bold] {agents['alive']}/{agents['total']} alive")
+            if agents['working'] > 0:
+                console.print(f"  Working: {agents['working']}")
+            if agents['error'] > 0:
+                console.print(f"  [red]Error: {agents['error']}[/red]")
+            if agents['dead'] > 0:
+                console.print(f"  [red]Dead: {agents['dead']}[/red]")
+            
+            # Tasks
+            tasks = data["tasks"]
+            console.print(f"\n[bold]Tasks:[/bold] {tasks['completed']}/{tasks['total']} completed")
+            console.print(f"  In progress: {tasks['in_progress']}")
+            if tasks['pending'] > 0:
+                console.print(f"  Pending: {tasks['pending']}")
+            if tasks['blocked'] > 0:
+                console.print(f"  [yellow]Blocked: {tasks['blocked']}[/yellow]")
+            if tasks['timeout'] > 0:
+                console.print(f"  [red]Timeout: {tasks['timeout']}[/red]")
+            if tasks['alert'] > 0:
+                console.print(f"  [yellow]Slow: {tasks['alert']}[/yellow]")
+        
+        _output(dashboard, _human)
+    
+    if watch:
+        try:
+            while True:
+                console.clear()
+                console.print(f"[bold]Monitoring {team}[/bold] (Ctrl+C to exit)\n")
+                _show()
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Monitoring stopped.[/dim]")
+    else:
+        _show()
+
+
+@monitor_app.command("agents")
+def monitor_agents(
+    team: str = typer.Argument(..., help="Team name"),
+):
+    """Show detailed agent health status."""
+    from clawteam.health import HealthMonitor
+    
+    monitor = HealthMonitor(team)
+    agents = monitor.get_all_agents_health()
+    
+    def _human(data):
+        table = Table(title=f"Agent Health - {team}")
+        table.add_column("Agent", style="cyan")
+        table.add_column("Status")
+        table.add_column("Task")
+        table.add_column("Progress")
+        table.add_column("Restarts")
+        
+        for agent in data:
+            status_color = {
+                "working": "green",
+                "idle": "blue",
+                "error": "red",
+                "unknown": "dim",
+            }.get(agent.status, "white")
+            
+            alive_marker = "[green]●[/green]" if agent.alive else "[red]●[/red]"
+            
+            table.add_row(
+                f"{alive_marker} {agent.name}",
+                f"[{status_color}]{agent.status}[/{status_color}]",
+                agent.current_task or "-",
+                f"{agent.progress}%" if agent.progress > 0 else "-",
+                str(agent.restart_count) if agent.restart_count > 0 else "-",
+            )
+        
+        console.print(table)
+    
+    _output([{"name": a.name, "alive": a.alive, "status": a.status, 
+              "current_task": a.current_task, "progress": a.progress,
+              "restart_count": a.restart_count} for a in agents], _human)
+
+
+@monitor_app.command("timeouts")
+def monitor_timeouts(
+    team: str = typer.Argument(..., help="Team name"),
+    release: bool = typer.Option(False, "--release", help="Release stuck tasks"),
+):
+    """Show tasks with timeout issues."""
+    from clawteam.timeout import TimeoutWatcher
+    
+    watcher = TimeoutWatcher(team)
+    
+    if release:
+        released = watcher.auto_release_stuck_tasks()
+        _output(
+            {"released": released},
+            lambda d: console.print(f"[green]Released {len(d['released'])} stuck tasks:[/green] {', '.join(d['released'])}") if d['released'] else console.print("[dim]No stuck tasks to release.[/dim]")
+        )
+    else:
+        stuck = watcher.get_stuck_tasks()
+        slow = watcher.get_slow_tasks()
+        summary = watcher.get_timeout_summary()
+        
+        def _human(data):
+            if data["stuck"]:
+                console.print("[red bold]Timed out tasks:[/red bold]")
+                for task in data["stuck"]:
+                    console.print(f"  • {task['task_id']}: {task['message']}")
+            
+            if data["slow"]:
+                console.print("\n[yellow bold]Slow tasks:[/yellow bold]")
+                for task in data["slow"]:
+                    console.print(f"  • {task['task_id']}: {task['message']}")
+            
+            if not data["stuck"] and not data["slow"]:
+                console.print("[green]All tasks progressing normally.[/green]")
+            
+            console.print(f"\n[dim]Summary: {summary['ok']} ok, {summary['alert']} slow, {summary['timeout']} timeout[/dim]")
+        
+        _output({"stuck": stuck, "slow": slow, "summary": summary}, _human)
+
+
+@monitor_app.command("restart-dead")
+def monitor_restart_dead(
+    team: str = typer.Argument(..., help="Team name"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be restarted without doing it"),
+):
+    """Restart dead agents."""
+    from clawteam.recovery import AutoRestart
+    
+    recovery = AutoRestart(team)
+    
+    if dry_run:
+        summary = recovery.get_restart_summary()
+        _output(
+            summary,
+            lambda d: console.print(f"Would restart {d['restartable']} dead agents: {', '.join(d['dead_agents'])}") if d['dead_agents'] else console.print("[dim]No dead agents to restart.[/dim]")
+        )
+    else:
+        results = recovery.check_and_restart_all()
+        _output(
+            {"results": results},
+            lambda d: console.print(f"[green]Restarted {sum(1 for r in d['results'] if r.get('success'))} agents[/green]") if d['results'] else console.print("[dim]No agents needed restart.[/dim]")
+        )
+
+
 if __name__ == "__main__":
     app()
